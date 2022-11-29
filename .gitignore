@@ -59,3 +59,4 @@ host_config.json
 
 # rebar lock file
 rebar.lock
+host_core/native/hostcore_wasmruntime_wasmtime_native/.gitignore

@@ -41,9 +41,9 @@ defmodule HostCore.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:wasmex, "~> 0.7.0"},
       {:msgpax, "~> 2.3"},
-      {:rustler, "~> 0.24.0"},
+      {:rustler, "~> 0.25.0"},
+      {:rustler_precompiled, "~> 0.5.1"},
       {:timex, "~> 3.7"},
       {:jason, "~> 1.2.2"},
       {:gnat, "~> 1.6.0"},
@@ -54,6 +54,7 @@ defmodule HostCore.MixProject do
       {:opentelemetry_exporter, "~> 1.0", application: false},
       {:opentelemetry_logger_metadata, "~> 0.1.0"},
       {:phoenix_pubsub, "~> 2.1.1"},
+      {:wasmruntime, path: "../../wasmruntime"},
 
       # {:vapor, "~> 0.10.0"},
       # TODO: switch to new version of vapor once PR is merged

@@ -6,8 +6,7 @@ ARG RELEASE_IMAGE
 FROM ${BUILDER_IMAGE} AS builder
 
 ARG MIX_ENV=prod
-ENV MIX_ENV=${MIX_ENV} \
-    WASMEX_BUILD=true
+ENV MIX_ENV=${MIX_ENV}
 
 WORKDIR /opt/app
 COPY ./ ./
@@ -20,7 +19,7 @@ RUN if [ "$MIX_ENV" = "release_prod" ] ; then cp ./priv/built/`uname -m`/libhost
 # Ensure intermediate artifacts don't get bundled into the final release
 RUN rm -rf priv/built/aarch64 priv/built/x86_64 priv/native
 
-# Get Rust for building NIFs (wasmex)
+# Get Rust for building NIFs
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
 # Set PATH to include Rust toolchain, enable static compilation
 ENV PATH="/root/.cargo/bin:${PATH}" \

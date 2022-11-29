@@ -175,7 +175,9 @@ defmodule HostCore.Actors.ActorModule do
       instance_id = Agent.get(agent, fn content -> content.instance_id end)
       Tracer.set_attribute("instance_id", instance_id)
 
-      {:ok, module} = Wasmex.Module.compile(bytes)
+      # TODO WASI
+      {:ok, store} = HostCore.WasmRuntime.Wasmtime.Store.new()
+      {:ok, module} = HostCore.WasmRuntime.Wasmtime.Module.compile(store, bytes)
 
       imports = %{
         wapc: Imports.wapc_imports(agent),
@@ -184,31 +186,30 @@ defmodule HostCore.Actors.ActorModule do
 
       # TODO - in the future, poll these so we can forward the err/out pipes
       # to our logger
-      {:ok, stdin} = Wasmex.Pipe.create()
-      {:ok, stdout} = Wasmex.Pipe.create()
-      {:ok, stderr} = Wasmex.Pipe.create()
+      {:ok, stdin} = HostCore.WasmRuntime.Wasmtime.Pipe.create()
+      {:ok, stdout} = HostCore.WasmRuntime.Wasmtime.Pipe.create()
+      {:ok, stderr} = HostCore.WasmRuntime.Wasmtime.Pipe.create()
 
       wasi = %{
         args: [],
         env: %{},
-        preopen: %{},
         stdin: stdin,
         stdout: stdout,
         stderr: stderr
       }
 
       opts =
-        if imports_wasi?(Wasmex.Module.imports(module)) do
-          %{module: module, imports: imports, wasi: wasi}
+        if imports_wasi?(HostCore.WasmRuntime.Wasmtime.Module.imports(module)) do
+          %{module: module, store: store, imports: imports, wasi: wasi}
         else
-          %{module: module, imports: imports}
+          %{module: module, store: store, imports: imports}
         end
 
       # shut down the previous Wasmex instance to avoid orphaning it
       old_instance = Agent.get(agent, fn content -> content.instance end)
       GenServer.stop(old_instance, :normal)
 
-      case Wasmex.start_link(opts)
+      case HostCore.WasmRuntime.Wasmtime.start_link(opts)
            |> prepare_module(agent, oci, false) do
         {:ok, new_agent} ->
           Logger.debug("Replaced and restarted underlying wasm module")
@@ -636,40 +637,41 @@ defmodule HostCore.Actors.ActorModule do
     # we consider a hash of bytes as a unique key
     key = :crypto.hash(:sha256, bytes) |> Base.encode16()
 
-    module =
+    context =
       case :ets.lookup(:module_cache, key) do
         [{_, cached_mod}] ->
           cached_mod
 
         [] ->
-          {:ok, mod} = Wasmex.Module.compile(bytes)
-          :ets.insert(:module_cache, {key, mod})
-          mod
+          {:ok, store} = HostCore.WasmRuntime.Wasmtime.Store.new()
+          {:ok, mod} = HostCore.WasmRuntime.Wasmtime.Module.compile(store, bytes)
+          ctx = %{store: store, module: mod}
+          :ets.insert(:module_cache, {key, ctx})
+          ctx
       end
 
     # TODO - in the future, poll these so we can forward the err/out pipes
     # to our logger
-    {:ok, stdin} = Wasmex.Pipe.create()
-    {:ok, stdout} = Wasmex.Pipe.create()
-    {:ok, stderr} = Wasmex.Pipe.create()
+    {:ok, stdin} = HostCore.WasmRuntime.Wasmtime.Pipe.create()
+    {:ok, stdout} = HostCore.WasmRuntime.Wasmtime.Pipe.create()
+    {:ok, stderr} = HostCore.WasmRuntime.Wasmtime.Pipe.create()
 
     wasi = %{
       args: [],
       env: %{},
-      preopen: %{},
       stdin: stdin,
       stdout: stdout,
       stderr: stderr
     }
 
     opts =
-      if imports_wasi?(Wasmex.Module.imports(module)) do
-        %{module: module, imports: imports, wasi: wasi}
+      if imports_wasi?(HostCore.WasmRuntime.Wasmtime.Module.imports(context.module)) do
+        %{module: context.module, store: context.store, imports: imports, wasi: wasi}
       else
-        %{module: module, imports: imports}
+        %{module: context.module, store: context.store, imports: imports}
       end
 
-    case Wasmex.start_link(opts)
+    case HostCore.WasmRuntime.Wasmtime.start_link(opts)
          |> prepare_module(agent, oci, true) do
       {:ok, agent} ->
         Agent.update(agent, fn state ->
@@ -732,10 +734,10 @@ defmodule HostCore.Actors.ActorModule do
 
         # invoke __guest_call
         # if it fails, set guest_error, return 1
-        # if it succeeeds, set guest_response, return 0
+        # if it succeeds, set guest_response, return 0
         try do
           res =
-            Wasmex.call_function(raw_state.instance, :__guest_call, [
+            HostCore.WasmRuntime.Wasmtime.call_function(raw_state.instance, :__guest_call, [
               byte_size(operation),
               byte_size(payload)
             ])
@@ -799,30 +801,24 @@ defmodule HostCore.Actors.ActorModule do
 
   defp prepare_module({:ok, instance}, agent, oci, first_time) do
     api_version =
-      case Wasmex.call_function(instance, :__wasmbus_rpc_version, []) do
+      case HostCore.WasmRuntime.Wasmtime.call_function(instance, :__wasmbus_rpc_version, []) do
         {:ok, [v]} -> v
         _ -> 0
       end
 
     agent_state = Agent.get(agent, fn contents -> contents end)
 
-    claims = agent_state.claims
-    instance_id = agent_state.instance_id
-    annotations = agent_state.annotations
-    host_id = agent_state.host_id
-    lattice_prefix = agent_state.lattice_prefix
-
     if Wasmex.function_exists(instance, :start) do
       Wasmex.call_function(instance, :start, [])
     end
 
-    if Wasmex.function_exists(instance, :wapc_init) do
-      Wasmex.call_function(instance, :wapc_init, [])
+    if HostCore.WasmRuntime.Wasmtime.function_exists(instance, :wapc_init) do
+      HostCore.WasmRuntime.Wasmtime.call_function(instance, :wapc_init, [])
     end
 
     # TinyGo exports `main` as `_start`
-    if Wasmex.function_exists(instance, :_start) do
-      Wasmex.call_function(instance, :_start, [])
+    if HostCore.WasmRuntime.Wasmtime.function_exists(instance, :_start) do
+      HostCore.WasmRuntime.Wasmtime.call_function(instance, :_start, [])
     end
 
     Agent.update(agent, fn content ->
